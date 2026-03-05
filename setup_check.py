@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-setup_check.py — Hardware detection script for the LLM Lab YouTube video series.
+setup_check.py — Hardware detection script for the local AI video series.
 
 Detects your system hardware, checks MLX availability, and recommends
 the best models to run locally based on your available RAM.
@@ -253,7 +253,7 @@ QUICKSTART_OTHER = """\
 # ---------------------------------------------------------------------------
 
 def main():
-    header("LLM Lab — Hardware Setup Check")
+    header("Hardware Setup Check")
 
     # ── OS ──────────────────────────────────────────────────────────────────
     section("Operating System")
@@ -362,7 +362,7 @@ def main():
     # ── Footer ───────────────────────────────────────────────────────────────
     print()
     print(_c("  " + "─" * 58, DIM))
-    print(_c("  LLM Lab  ·  github.com/your-channel  ·  Happy hacking! 🚀", DIM))
+    print(_c("  github.com/shanemmattner/llm-lab-videos  ·  Happy hacking! 🚀", DIM))
     print()
 
 

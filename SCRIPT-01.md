@@ -11,7 +11,7 @@
 ## [0:00–1:00] Welcome & Series Intro
 
 **SAY**
-- Welcome to LLM Lab — a hands-on engineering series, not a prompt-engineering course. This is for people who want to know what's *inside* the box.
+- Welcome — this is a hands-on engineering series, not a prompt-engineering course. This is for people who want to know what's *inside* the box.
 - Who it's for: engineers comfortable with Python, virtual environments, and floating-point formats. You don't need HuggingFace or Apple ML experience — that's what we're building here.
 - By the end of this episode you'll have a large language model running locally on your Mac, and you'll understand *why* it works at the hardware level — not just that it works.
 - Quick teaser of the series arc: inference → tokenization → fine-tuning → agents. Episode 1 is the foundation everything else builds on.

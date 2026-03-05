@@ -2,4 +2,5 @@ openai
 jupyter
 ipykernel
 psutil
+markdown
 mlx-lm  # Apple Silicon only — skip on Linux/Windows
