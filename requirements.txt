@@ -1,0 +1,5 @@
+openai
+jupyter
+ipykernel
+psutil
+mlx-lm  # Apple Silicon only — skip on Linux/Windows
