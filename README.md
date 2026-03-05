@@ -6,6 +6,14 @@ A notebook series accompanying the [LLM Lab](https://github.com/shanemmattner/ll
 
 ---
 
+## About This Series
+
+This stuff is dense — there's a lot to learn, and making the series is how I'm learning it. I retain things best by teaching, so building this out is as much for me as it is for anyone watching. I just picked up a Mac Studio M4 Max and wanted to actually push it rather than just browse the web on a very expensive machine. My background is embedded systems and firmware, so the analogies I reach for tend to come from that world — unified memory maps more naturally to me as an SoC architecture than a discrete GPU setup, quantization makes sense framed against ADC resolution, and the prefill/decode split feels a lot like flash reads versus bit-banging a peripheral. If you come from a hardware or firmware background, those comparisons will probably land; if not, feel free to skip past them.
+
+Who is this for? Anyone who wants to learn local LLM stuff — and realistically a Mac is required, not just recommended. The MLX stack only runs on Apple Silicon. You can follow along on Linux/Windows with Ollama but the scripts won't be identical. 32GB+ RAM recommended to run models at a useful size.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -31,13 +39,14 @@ jupyter notebook
 
 ## Hardware Requirements
 
-| RAM | Status |
-|-----|--------|
-| 16 GB | Minimum — small models only |
-| 64 GB+ | Recommended — comfortable for most episodes |
-| 128 GB | Ideal — full-scale model experimentation |
+| RAM | Notes |
+|-----|-------|
+| 16 GB | Works — limited to small/quantized models |
+| 32 GB | Usable for most episodes |
+| 64 GB+ | Comfortable — covers the majority of what this series runs |
+| 128 GB | Headroom for full-scale model experimentation |
 
-All notebooks target Apple Silicon (M-series). `mlx-lm` is Apple Silicon only and will be skipped on Linux/Windows.
+**Apple Silicon Mac is required.** The MLX stack does not run on Linux or Windows. Linux/Windows users can substitute Ollama for the inference pieces, but the notebooks are written for MLX and won't run as-is.
 
 ---
 
