@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # start_servers.sh — Launch 3 MLX servers for the 3-model arena comparison
 # Requires: ~/.local/share/mlx-server/venv/ with mlx-lm installed
@@ -15,14 +15,14 @@ VENV="$HOME/.local/share/mlx-server/venv"
 
 declare -A MODELS=(
     [8800]="arthurcollet/Qwen3.5-122B-A10B-mlx-nvfp4"
-    [8801]="mlx-community/Qwen3.5-35B-A3B-4bit"
-    [8802]="mlx-community/Qwen3.5-0.8B-4bit"
+    [8801]="RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4"
+    [8802]="RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4"
 )
 
 declare -A LABELS=(
     [8800]="122B"
     [8801]="35B"
-    [8802]="0.8B"
+    [8802]="2B"
 )
 
 echo -e "${BOLD}MLX 3-Model Arena — Starting Servers${RESET}"
@@ -53,23 +53,27 @@ for port in 8800 8801 8802; do
         > "$logfile" 2>&1 &
 done
 
-# Wait for servers to initialize
+# Wait for servers — poll with retries (large models need time to load)
 echo ""
-echo "Waiting for servers to load models..."
-sleep 10
+echo "Waiting for servers to load models (up to 3 min)..."
 
-# Health check each server
 ok=0
 fail=0
-echo ""
 for port in 8800 8801 8802; do
     label="${LABELS[$port]}"
-    if curl -s --max-time 5 "http://localhost:${port}/v1/models" > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${RESET} ${BOLD}${label}${RESET} (port ${port}) — ready"
-        ((ok++))
-    else
-        echo -e "  ${RED}✗${RESET} ${BOLD}${label}${RESET} (port ${port}) — not responding (check /tmp/mlx-server-${port}.log)"
-        ((fail++))
+    ready=false
+    for i in $(seq 1 36); do  # 36 × 5s = 3 min max
+        if curl -s --max-time 5 "http://localhost:${port}/v1/models" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${RESET} ${BOLD}${label}${RESET} (port ${port}) — ready (${i}×5s)"
+            ready=true
+            ok=$((ok + 1))
+            break
+        fi
+        sleep 5
+    done
+    if [[ "$ready" == "false" ]]; then
+        echo -e "  ${RED}✗${RESET} ${BOLD}${label}${RESET} (port ${port}) — timed out (check /tmp/mlx-server-${port}.log)"
+        fail=$((fail + 1))
     fi
 done
 
@@ -78,5 +82,5 @@ echo "────────────────────────�
 if [[ $fail -eq 0 ]]; then
     echo -e "${GREEN}${BOLD}All ${ok} servers ready.${RESET} Run the notebook!"
 else
-    echo -e "${YELLOW}${BOLD}${ok}/${((ok+fail))} servers ready.${RESET} Check logs for failures."
+    echo -e "${YELLOW}${BOLD}${ok}/$((ok+fail)) servers ready.${RESET} Check logs for failures."
 fi

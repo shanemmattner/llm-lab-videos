@@ -192,13 +192,6 @@ MODELS = [
         "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-35B-A3B-4bit",
     },
     {
-        "name":    "Qwen3-32B-4bit",
-        "size_gb": 18,
-        "min_ram": 20,
-        "note":    "~18 GB — strong dense model",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3-32B-4bit",
-    },
-    {
         "name":    "Qwen3.5-2B-4bit",
         "size_gb": 1.2,
         "min_ram": 4,
