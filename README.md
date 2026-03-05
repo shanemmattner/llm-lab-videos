@@ -18,7 +18,7 @@ cd llm-lab-videos
 pip install -r requirements.txt
 python scripts/setup_check.py
 bash scripts/start_servers.sh
-jupyter notebook sections/01-model-arena/01-mlx-inference.ipynb
+jupyter notebook sections/01-mlx-inference/01-mlx-inference.ipynb
 # when done:
 bash scripts/stop_servers.sh
 ```
@@ -27,14 +27,16 @@ bash scripts/stop_servers.sh
 
 | # | Topic | Notebook |
 |---|-------|----------|
-| 01 | [3-Model Arena Comparison](sections/01-model-arena/) | Run 122B, 35B, and 2B side-by-side |
+| 01 | [MLX Inference](sections/01-mlx-inference/) | Load, run, and compare 122B, 35B, and 2B models side-by-side |
+| 01b | [Model Datasheet](sections/01-mlx-inference/01b-model-datasheet.ipynb) | Architecture deep dive — DeltaNet/GQA hybrid, MoE routing, KV cache math |
+| 01c | [Inference Optimization](sections/01-mlx-inference/01c-inference-optimization.ipynb) | Speculative decoding, prefix caching, quantization formats, continuous batching |
 
 ## Structure
 
 ```
-sections/01-model-arena/   Notebook + presenter notes
-scripts/                   Server management, hardware check
-requirements.txt           Python dependencies
+sections/01-mlx-inference/   Notebooks + presenter notes
+scripts/                     Server management, hardware check
+requirements.txt             Python dependencies
 ```
 
 ## License
