@@ -89,6 +89,58 @@ NOTEBOOK_CONFIGS: dict[str, dict[str, dict]] = {
         "cell-quant-quality": {"type": "live", "needs_ports": "any"},
         "cell-batching": {"type": "live", "needs_ports": "any"},
     },
+    "02-tokenization-and-embeddings.ipynb": {
+        "cell-cover": {"type": "static"},
+        "cell-setup-check": {"type": "static"},
+        "cell-setup": {
+            "type": "live",
+            "needs_ports": "any",
+            "expect": {
+                "output_contains": ["models ready"],
+                "html_contains": ["Model", "Port"],
+            },
+        },
+        "cell-helpers": {
+            "type": "static",
+            "expect": {
+                "output_contains": ["Helpers loaded"],
+            },
+        },
+        "cell-tokenizer-intro": {"type": "live", "needs_ports": "any"},
+        "cell-bpe-visual": {"type": "static"},
+        "cell-vocab-tradeoffs": {"type": "static"},
+        "cell-special-tokens": {"type": "static"},
+        "cell-fertility": {"type": "live", "needs_ports": "any"},
+        "cell-embeddings-explain": {"type": "live", "needs_ports": "any"},
+        "cell-evolution": {"type": "static"},
+        "cell-quiz": {"type": "live", "needs_ports": "any"},
+    },
+    "03-prompting-techniques.ipynb": {
+        "cell-cover": {"type": "static"},
+        "cell-setup-check": {"type": "static"},
+        "cell-setup": {
+            "type": "live",
+            "needs_ports": "any",
+            "expect": {
+                "output_contains": ["models ready"],
+                "html_contains": ["Model", "Port"],
+            },
+        },
+        "cell-helpers": {
+            "type": "static",
+            "expect": {
+                "output_contains": ["Helpers loaded"],
+            },
+        },
+        "cell-zero-shot": {"type": "live", "needs_ports": "any"},
+        "cell-few-shot": {"type": "live", "needs_ports": "any"},
+        "cell-cot": {"type": "live", "needs_ports": "any"},
+        "cell-cot-classify": {"type": "live", "needs_ports": "any"},
+        "cell-self-consistency": {"type": "live", "needs_ports": "any", "timeout": 180},
+        "cell-system-prompts": {"type": "live", "needs_ports": "any"},
+        "cell-persona": {"type": "live", "needs_ports": "any"},
+        "cell-pitfalls": {"type": "static"},
+    },
 }
 
 MLX_PORTS = [8800, 8801, 8802]
