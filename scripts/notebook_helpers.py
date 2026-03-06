@@ -1,0 +1,260 @@
+import re
+import time
+import html
+import markdown
+import threading
+import socket
+from IPython.display import HTML, display
+
+# Registry of all known models
+ALL_MODELS = [
+    {"label": "122B", "model": "arthurcollet/Qwen3.5-122B-A10B-mlx-nvfp4",          "port": 8800, "color": "#2563eb"},
+    {"label": "35B",  "model": "RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4",   "port": 8801, "color": "#16a34a"},
+    {"label": "2B",   "model": "RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4",        "port": 8802, "color": "#f59e0b"},
+]
+
+# Module-level state (set by init())
+MODELS = []
+clients = {}
+
+
+def init(models, openai_clients):
+    """Called by notebooks after port scanning to inject runtime state."""
+    global MODELS, clients
+    MODELS = models
+    clients = openai_clients
+
+
+def _port_open(port):
+    """Check if a port is open on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        try:
+            s.connect(("localhost", port))
+            return True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            return False
+
+
+# Port → display color
+PORT_COLORS = {8800: "#2563eb", 8801: "#16a34a", 8802: "#f59e0b"}
+PORTS = [8800, 8801, 8802]
+
+
+def _label_from_model_id(model_id):
+    """Derive a short label (e.g. '9B', '122B') from a model ID string."""
+    name = model_id.split("/")[-1].lower()
+    for tag in ["122b", "35b", "9b", "8b", "2b", "0.6b", "0.5b"]:
+        if tag in name:
+            return tag.upper()
+    return name[:12]
+
+
+def _get_model_id_from_process(port):
+    """Get the --model argument from the mlx_lm process listening on a port."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        pid = result.stdout.strip().split("\n")[0]
+        result = subprocess.run(
+            ["ps", "-p", pid, "-o", "args="],
+            capture_output=True, text=True, timeout=5,
+        )
+        args = result.stdout.strip()
+        # Parse --model from: python -m mlx_lm server --model <id> --port ...
+        parts = args.split()
+        for i, part in enumerate(parts):
+            if part == "--model" and i + 1 < len(parts):
+                return parts[i + 1]
+    except Exception:
+        pass
+    return None
+
+
+def discover_servers(ports=None):
+    """Discover running MLX servers by checking each port.
+
+    Gets the actual model ID from the process command line (not /v1/models,
+    which lists all cached models and causes model-swap errors).
+
+    Returns (models_list, clients_dict) ready to pass to init().
+    """
+    from openai import OpenAI
+
+    ports = ports or PORTS
+    models = []
+    _clients = {}
+    for port in ports:
+        if not _port_open(port):
+            continue
+        model_id = _get_model_id_from_process(port)
+        if not model_id:
+            continue
+        label = _label_from_model_id(model_id)
+        color = PORT_COLORS.get(port, "#6b7280")
+        m = {"label": label, "model": model_id, "port": port, "color": color}
+        models.append(m)
+        _clients[label] = OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="unused")
+    return models, _clients
+
+
+def strip_think(text):
+    """Remove <think>...</think> blocks from Qwen3.5 reasoning output."""
+    cleaned = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
+    if '<think>' in cleaned:
+        cleaned = cleaned[:cleaned.index('<think>')]
+    return cleaned.strip()
+
+
+def _md(text):
+    """Convert markdown text to HTML. Falls back to escaped text on error."""
+    try:
+        return markdown.markdown(text, extensions=["fenced_code", "tables"])
+    except Exception:
+        return html.escape(text)
+
+
+def _render_cards(state, models_order):
+    """Render 3-column HTML cards from current state."""
+    cards = ""
+    for m in models_order:
+        s = state[m["label"]]
+        text = strip_think(s["text"])
+        if not text and not s["done"]:
+            rendered = "<em>waiting...</em>"
+        elif not text and s["done"]:
+            rendered = "<em>(empty response)</em>"
+        else:
+            rendered = _md(text)
+        if s["done"]:
+            ttft_ms = int(s["ttft"] * 1000) if s.get("ttft") is not None else None
+            ttft_str = f"TTFT {ttft_ms}ms · " if ttft_ms is not None else ""
+            status = f"{ttft_str}{s['tps']:.1f} tok/s"
+        else:
+            ttft = s.get("ttft")
+            elapsed_str = f"{s['elapsed']:.1f}s" if s["elapsed"] > 0 else ""
+            if ttft is not None:
+                ttft_ms = int(ttft * 1000)
+                status = f"streaming... TTFT: {ttft_ms}ms · {s['tokens']} tok {elapsed_str}"
+            else:
+                status = f"streaming... {s['tokens']} tok {elapsed_str}"
+        cards += f"""
+        <div style="flex:1; min-width:250px; background:#f9fafb; border:1px solid #d1d5db;
+                    border-left:4px solid {s['color']}; border-radius:0 8px 8px 0; padding:12px 18px;">
+          <div style="color:{s['color']}; font-weight:bold; font-size:0.85em; margin-bottom:6px;">
+            {m['label']} · {status}
+          </div>
+          <div style="color:#1f2937; line-height:1.6; word-wrap:break-word; font-size:0.9em;">
+            {rendered}
+          </div>
+          <div style="color:#9ca3af; font-size:0.75em; margin-top:8px;">
+            {s['tokens']} tokens in {s['elapsed']:.1f}s
+          </div>
+        </div>"""
+    return f'<div style="display:flex; gap:16px; flex-wrap:wrap; margin:10px 0;">{cards}</div>'
+
+
+def compare_models(prompt, system_prompt=None, **kwargs):
+    """Fire the same prompt at all 3 models in parallel with streaming, display side-by-side cards."""
+    kwargs.setdefault("max_tokens", 1024)
+    kwargs.setdefault("extra_body", {"chat_template_kwargs": {"enable_thinking": False}})
+
+    order = {"2B": 0, "35B": 1, "122B": 2}
+    models_order = sorted(MODELS, key=lambda m: order.get(m["label"], 99))
+
+    # Shared state for each model
+    state = {}
+    for m in MODELS:
+        state[m["label"]] = {"text": "", "tokens": 0, "elapsed": 0, "tps": 0, "ttft": None, "done": False, "color": m["color"]}
+
+    handle = display(HTML(_render_cards(state, models_order)), display_id=True)
+
+    def stream_model(m):
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        t0 = time.time()
+        try:
+            response = clients[m["label"]].chat.completions.create(
+                model=m["model"], messages=messages, stream=True, **kwargs
+            )
+            token_count = 0
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    if state[m["label"]]["ttft"] is None:
+                        state[m["label"]]["ttft"] = time.time() - t0
+                    state[m["label"]]["text"] += chunk.choices[0].delta.content
+                    token_count += 1
+                    elapsed = time.time() - t0
+                    state[m["label"]]["tokens"] = token_count
+                    state[m["label"]]["elapsed"] = elapsed
+                    state[m["label"]]["tps"] = token_count / elapsed if elapsed > 0 else 0
+        except Exception as e:
+            state[m["label"]]["text"] = f"Error: {e}"
+        finally:
+            elapsed = time.time() - t0
+            state[m["label"]]["elapsed"] = elapsed
+            if state[m["label"]]["tokens"] > 0:
+                state[m["label"]]["tps"] = state[m["label"]]["tokens"] / elapsed
+            state[m["label"]]["done"] = True
+
+    # Launch all 3 streaming threads
+    threads = []
+    for m in MODELS:
+        t = threading.Thread(target=stream_model, args=(m,))
+        t.start()
+        threads.append(t)
+
+    # Refresh display every 300ms until all done
+    while not all(state[m["label"]]["done"] for m in MODELS):
+        time.sleep(0.3)
+        handle.update(HTML(_render_cards(state, models_order)))
+
+    # Final render
+    handle.update(HTML(_render_cards(state, models_order)))
+
+    # Return results
+    results = []
+    for m in models_order:
+        s = state[m["label"]]
+        results.append({
+            "label": m["label"], "text": strip_think(s["text"]),
+            "tokens": s["tokens"], "elapsed": s["elapsed"],
+            "tps": s["tps"], "ttft": s["ttft"], "color": s["color"]
+        })
+    return results
+
+
+def show_metrics_table(results):
+    """Render a comparison metrics table from compare_models results."""
+    rows = ""
+    for r in results:
+        ttft_ms = int(r["ttft"] * 1000) if r.get("ttft") is not None else None
+        ttft_str = f"{ttft_ms} ms" if ttft_ms is not None else "—"
+        rows += (
+            f"<tr>"
+            f"<td style='padding:6px 12px; color:{r['color']}; font-weight:bold; border-bottom:1px solid #e5e7eb;'>{r['label']}</td>"
+            f"<td style='padding:6px 12px; color:#111827; border-bottom:1px solid #e5e7eb;'>{ttft_str}</td>"
+            f"<td style='padding:6px 12px; color:#111827; border-bottom:1px solid #e5e7eb;'>{r['tokens']}</td>"
+            f"<td style='padding:6px 12px; color:#111827; border-bottom:1px solid #e5e7eb;'>{r['elapsed']:.1f}s</td>"
+            f"<td style='padding:6px 12px; color:#16a34a; font-weight:bold; border-bottom:1px solid #e5e7eb;'>{r['tps']:.1f}</td>"
+            f"</tr>"
+        )
+    display(HTML(f"""
+    <table style="background:#f9fafb; border:1px solid #d1d5db; border-collapse:collapse; border-radius:8px; overflow:hidden; margin:10px 0; font-family:monospace; min-width:400px;">
+      <thead><tr style="background:#1e3a5f;">
+        <th style="padding:8px 12px; color:white; text-align:left;">Model</th>
+        <th style="padding:8px 12px; color:white; text-align:left;">TTFT</th>
+        <th style="padding:8px 12px; color:white; text-align:left;">Tokens</th>
+        <th style="padding:8px 12px; color:white; text-align:left;">Time</th>
+        <th style="padding:8px 12px; color:white; text-align:left;">tok/s</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    """))
