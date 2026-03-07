@@ -171,6 +171,77 @@ def discover_servers(ports=None):
     return models, _clients
 
 
+def _render_warmup_table(models, status):
+    """Render HTML warmup table with current status for each model."""
+    rows = ""
+    for m in models:
+        s = status[m["label"]]
+        if s["done"]:
+            icon = "✓" if s["ok"] else "✗"
+            color = "#16a34a" if s["ok"] else "#dc2626"
+            time_str = f"{s['elapsed']:.1f}s"
+        else:
+            icon = "⏳"
+            color = "#9ca3af"
+            time_str = "..."
+        rows += (
+            f"<tr>"
+            f"<td style='padding:6px 12px; color:{m['color']}; font-weight:bold; border-bottom:1px solid #e5e7eb;'>{m['label']}</td>"
+            f"<td style='padding:6px 12px; color:#374151; border-bottom:1px solid #e5e7eb;'>{m['port']}</td>"
+            f"<td style='padding:6px 12px; color:#374151; font-size:0.85em; border-bottom:1px solid #e5e7eb;'>{m['model']}</td>"
+            f"<td style='padding:6px 12px; color:{color}; font-weight:bold; border-bottom:1px solid #e5e7eb;'>{icon}</td>"
+            f"<td style='padding:6px 12px; color:#111827; font-weight:bold; border-bottom:1px solid #e5e7eb;'>{time_str}</td>"
+            f"</tr>"
+        )
+    done_count = sum(1 for s in status.values() if s["done"])
+    title = f"Warming up {len(models)} models..." if done_count < len(models) else f"All {len(models)} models ready!"
+    return f"""<div style="font-weight:bold; margin:8px 0;">{title}</div>
+<table style="background:#f9fafb; border:1px solid #d1d5db; border-collapse:collapse; border-radius:8px; overflow:hidden; margin:4px 0; font-family:monospace; min-width:400px;">
+  <thead><tr style="background:#1e3a5f;">
+    <th style="padding:8px 12px; color:white; text-align:left;">Model</th>
+    <th style="padding:8px 12px; color:white; text-align:left;">Port</th>
+    <th style="padding:8px 12px; color:white; text-align:left;">Model ID</th>
+    <th style="padding:8px 12px; color:white; text-align:left;">Status</th>
+    <th style="padding:8px 12px; color:white; text-align:left;">Warmup</th>
+  </tr></thead>
+  <tbody>{rows}</tbody>
+</table>"""
+
+
+def warmup_models(models, clients_dict):
+    """Warm up all models in parallel with a live-updating status table.
+
+    Returns the models list (unchanged). Call after discover_servers().
+    """
+    status = {m["label"]: {"done": False, "ok": False, "elapsed": 0} for m in models}
+    handle = display(HTML(_render_warmup_table(models, status)), display_id=True)
+
+    def _warmup_one(m):
+        t0 = time.time()
+        try:
+            clients_dict[m["label"]].chat.completions.create(
+                model=m["model"],
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+            )
+            status[m["label"]] = {"done": True, "ok": True, "elapsed": time.time() - t0}
+        except Exception:
+            status[m["label"]] = {"done": True, "ok": False, "elapsed": time.time() - t0}
+        handle.update(HTML(_render_warmup_table(models, status)))
+
+    threads = [threading.Thread(target=_warmup_one, args=(m,)) for m in models]
+    for t in threads:
+        t.start()
+
+    # Poll until all done (update display periodically even if no thread finishes)
+    while not all(s["done"] for s in status.values()):
+        time.sleep(0.5)
+        handle.update(HTML(_render_warmup_table(models, status)))
+
+    handle.update(HTML(_render_warmup_table(models, status)))
+    return models
+
+
 def active_params_b(label):
     """Active params in billions from label. MoE '35B-A3B' -> 3.0, Dense '9B' -> 9.0."""
     moe = re.search(r'-A(\d+(?:\.\d+)?)B$', label)
