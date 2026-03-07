@@ -105,7 +105,7 @@ def _sort_key(label):
 def list_available_models(port=8800):
     """Query an MLX server's /v1/models endpoint to list all cached models.
 
-    Returns list of dicts sorted by size (largest first):
+    Returns list of dicts sorted by size (smallest first):
         [{"model": "full/model-id", "label": "35B-A3B"}, ...]
     """
     import urllib.request, json
@@ -119,7 +119,7 @@ def list_available_models(port=8800):
         model_id = m["id"]
         label = _label_from_model_id(model_id)
         models.append({"model": model_id, "label": label})
-    models.sort(key=lambda m: _sort_key(m["label"]))
+    models.sort(key=lambda m: _sort_key(m["label"]), reverse=True)
     return models
 
 
@@ -170,8 +170,8 @@ def discover_servers(ports=None):
         m = {"label": label, "model": model_id, "port": port}
         models.append(m)
         _clients[label] = OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="unused")
-    # Sort by size (largest first) and assign colors
-    models.sort(key=lambda m: _sort_key(m["label"]))
+    # Sort by size (smallest first, left to right)
+    models.sort(key=lambda m: _sort_key(m["label"]), reverse=True)
     for i, m in enumerate(models):
         m["color"] = COLORS[i % len(COLORS)]
     return models, _clients
