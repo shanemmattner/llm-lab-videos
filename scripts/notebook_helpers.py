@@ -177,6 +177,15 @@ def discover_servers(ports=None):
     return models, _clients
 
 
+def active_params_b(label):
+    """Active params in billions from label. MoE '35B-A3B' -> 3.0, Dense '9B' -> 9.0."""
+    moe = re.search(r'-A(\d+(?:\.\d+)?)B$', label)
+    if moe:
+        return float(moe.group(1))
+    base = re.search(r'^(\d+(?:\.\d+)?)B', label)
+    return float(base.group(1)) if base else 1.0
+
+
 def strip_think(text):
     """Remove <think>...</think> blocks from Qwen3.5 reasoning output."""
     if not text:
