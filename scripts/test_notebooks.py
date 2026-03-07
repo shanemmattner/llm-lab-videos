@@ -18,6 +18,7 @@ Usage:
     uv run scripts/test_notebooks.py                          # Test all notebooks
     uv run scripts/test_notebooks.py path/to/notebook.ipynb  # Test one notebook
     uv run scripts/test_notebooks.py --dry-run               # Validate config only
+    uv run scripts/test_notebooks.py --smoke                 # Run infra cells only (~15s)
     uv run scripts/test_notebooks.py --strict                # Warn on unconfigured cells
     uv run scripts/test_notebooks.py --validate-ids          # Check config IDs exist in notebook
 """
@@ -43,7 +44,7 @@ NOTEBOOK_CONFIGS: dict[str, dict[str, dict]] = {
     "01-mlx-inference.ipynb": {
         "cell-cover": {"type": "static"},
         "cell-setup-check": {"type": "static"},
-        "cell-warmup": {
+        "cell-setup": {
             "type": "live",
             "needs_ports": "any",
             "expect": {
@@ -331,8 +332,9 @@ def run_notebook(
     notebook_path: Path,
     port_status: dict[int, bool],
     dry_run: bool = False,
-    kernel_name: str = "python3",
+    kernel_name: str | None = None,
     strict: bool = False,
+    smoke: bool = False,
 ) -> dict:
     """
     Execute a single notebook cell-by-cell.
@@ -351,6 +353,15 @@ def run_notebook(
 
     nb = nbformat.read(str(notebook_path), as_version=4)
 
+    # Read kernel from notebook metadata if not explicitly provided
+    if kernel_name is None:
+        kernel_name = nb.metadata.get("kernelspec", {}).get("name", "python3")
+        print(f"  Using notebook kernel: {kernel_name}", flush=True)
+
+    # --smoke: only run infrastructure cells
+    SMOKE_CELL_IDS = {"cell-cover", "cell-setup-check", "cell-setup", "cell-helpers"}
+
+
     results = []
     counts = {"pass": 0, "fail": 0, "skip": 0, "warn": 0}
     unconfigured_cells: list[str] = []
@@ -362,7 +373,10 @@ def run_notebook(
                 continue
             cell_id = cell.get("id", f"cell-{i}")
             config = notebook_config.get(cell_id, {"type": "static"})
-            skip = should_skip(config, available_ports)
+            if smoke:
+                skip = cell_id not in SMOKE_CELL_IDS
+            else:
+                skip = should_skip(config, available_ports)
             status = "SKIP" if skip else "DRY-RUN"
             print(f"  {cell_id:<30} {status}")
             if skip:
@@ -407,8 +421,13 @@ def run_notebook(
             if strict and cell_id not in notebook_config:
                 unconfigured_cells.append(cell_id)
 
-            # Skip?
-            if should_skip(config, available_ports):
+            # Skip logic: smoke cells always run (bypass port check)
+            if smoke and cell_id not in SMOKE_CELL_IDS:
+                _print_cell_result(cell_id, "SKIP", 0.0)
+                counts["skip"] += 1
+                results.append({"cell_id": cell_id, "status": "SKIP", "duration": 0.0, "error": None, "warnings": []})
+                continue
+            if not smoke and should_skip(config, available_ports):
                 _print_cell_result(cell_id, "SKIP", 0.0)
                 counts["skip"] += 1
                 results.append({"cell_id": cell_id, "status": "SKIP", "duration": 0.0, "error": None, "warnings": []})
@@ -541,8 +560,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--kernel",
-        default="python3",
-        help="Jupyter kernel name (default: python3). Use 'homebrew-py3' on Mac Studio.",
+        default=None,
+        help="Jupyter kernel name. Default: read from notebook metadata (homebrew-py3).",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run only infrastructure cells (setup-check, setup, helpers) for fast import validation.",
     )
     parser.add_argument(
         "--strict",
@@ -625,6 +649,7 @@ def main() -> None:
             dry_run=args.dry_run,
             kernel_name=args.kernel,
             strict=args.strict,
+            smoke=args.smoke,
         )
         all_results.append(result)
 

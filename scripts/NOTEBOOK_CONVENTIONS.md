@@ -22,11 +22,13 @@ IDs are how the test harness identifies cells in `NOTEBOOK_CONFIGS`. A cell with
 |---|---|---|
 | 1 | `cell-cover` | Hero card HTML — title, subtitle, gradient background |
 | 2 | `cell-setup-check` | Port scan + server discovery via `discover_servers()` |
-| 3 | `cell-setup` | Import libs, call `notebook_helpers.init(models, clients)` |
+| 3 | `cell-setup` | Import guard + libs, call `notebook_helpers.init(models, clients)` |
 | 4 | `cell-helpers` | Define any notebook-local helper functions |
 | 5+ | `cell-{topic}` | Content cells — demos, experiments, visualisations |
 
 `cell-cover` and `cell-helpers` are almost always `"type": "static"` — they produce HTML output but don't need a live server.
+
+> **Import guard required.** Every `cell-setup` must begin with the try/except ImportError block that checks `openai` and `psutil` are importable. This catches wrong-kernel errors immediately with a clear message. The name `cell-setup` is universal — do not use `cell-warmup` or other variants.
 
 ---
 
@@ -145,6 +147,20 @@ See `notebook_helpers.show_metrics_table()` for a reusable implementation.
 
 ---
 
+## Kernel Requirements
+
+All notebooks use the `homebrew-py3` kernel (Homebrew Python 3.14 with `openai`, `psutil`, `markdown`, etc.). The default `python3` kernel resolves to a uv-managed venv that lacks these packages.
+
+The template pre-configures `homebrew-py3`. If the kernel is missing on your machine:
+
+```bash
+python3.14 -m ipykernel install --user --name homebrew-py3 --display-name "Python 3 (Homebrew)"
+```
+
+The test harness reads the kernel from notebook metadata by default — no `--kernel` flag needed.
+
+---
+
 ## Running Tests
 
 ```bash
@@ -156,4 +172,7 @@ uv run scripts/test_notebooks.py sections/01-mlx-inference/01-mlx-inference.ipyn
 
 # Validate config only (no kernel)
 uv run scripts/test_notebooks.py --dry-run
+
+# Fast import validation (~15s) — runs only infra cells
+uv run scripts/test_notebooks.py --smoke
 ```
