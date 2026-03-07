@@ -55,7 +55,7 @@ def _get_model_id_from_process(port):
     import subprocess
     try:
         result = subprocess.run(
-            ["lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
+            ["/usr/sbin/lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
