@@ -52,18 +52,20 @@ def _label_from_model_id(model_id):
 
 def _get_model_id_from_process(port):
     """Get the --model argument from the mlx_lm process listening on a port."""
-    import subprocess
+    import subprocess, os
+    env = os.environ.copy()
+    env["PATH"] = env.get("PATH", "") + ":/usr/sbin:/sbin"
     try:
         result = subprocess.run(
             ["/usr/sbin/lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, env=env,
         )
         if result.returncode != 0:
             return None
         pid = result.stdout.strip().split("\n")[0]
         result = subprocess.run(
             ["ps", "-p", pid, "-o", "args="],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, env=env,
         )
         args = result.stdout.strip()
         # Parse --model from: python -m mlx_lm server --model <id> --port ...

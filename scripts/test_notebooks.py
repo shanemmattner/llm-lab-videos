@@ -167,6 +167,117 @@ def scan_mlx_servers(ports: list[int] = MLX_PORTS) -> dict[int, bool]:
     return results
 
 
+VALIDATION_CODE = '''
+import os, subprocess, sys
+
+results = []
+
+# 1. PATH includes /usr/sbin
+path = os.environ.get("PATH", "")
+has_sbin = "/usr/sbin" in path
+results.append(("PATH has /usr/sbin", has_sbin, path if not has_sbin else ""))
+
+# 2. lsof is executable
+try:
+    r = subprocess.run(["/usr/sbin/lsof", "-v"], capture_output=True, timeout=5)
+    lsof_ok = r.returncode != 127
+except Exception as e:
+    lsof_ok = False
+results.append(("lsof executable", lsof_ok, ""))
+
+# 3. ps is accessible
+try:
+    r = subprocess.run(["ps", "-p", "1", "-o", "comm="], capture_output=True, timeout=5)
+    ps_ok = True
+except Exception:
+    ps_ok = False
+results.append(("ps accessible", ps_ok, ""))
+
+# 4. Required packages
+for pkg in ["openai", "psutil", "markdown"]:
+    try:
+        __import__(pkg)
+        results.append((f"import {pkg}", True, ""))
+    except ImportError:
+        results.append((f"import {pkg}", False, "not installed"))
+
+# Print results
+all_pass = True
+for name, ok, detail in results:
+    status = "PASS" if ok else "FAIL"
+    if not ok:
+        all_pass = False
+    suffix = f" ({detail})" if detail else ""
+    print(f"  {status}: {name}{suffix}")
+
+if not all_pass:
+    raise RuntimeError("ENV_CHECK_FAILED")
+'''
+
+
+def run_env_check(kernel_name: str | None = None) -> bool:
+    """
+    Validate kernel environment (PATH, tools, packages).
+
+    Starts a kernel, runs validation code inside it, prints PASS/FAIL for each
+    check, and returns True if all checks pass, False otherwise.
+    """
+    if kernel_name is None:
+        kernel_name = "homebrew-py3"
+
+    print("=== Environment Check ===", flush=True)
+
+    km = KernelManager(kernel_name=kernel_name)
+    try:
+        km.start_kernel()
+        kc = km.client()
+        kc.start_channels()
+        kc.wait_for_ready(timeout=30)
+
+        # Execute the validation cell interactively (blocks until done)
+        reply = kc.execute_interactive(
+            VALIDATION_CODE,
+            output_hook=lambda msg: _env_check_output_hook(msg),
+            timeout=60,
+        )
+
+        # Determine success from the reply status
+        status = reply.get("content", {}).get("status", "error")
+        all_pass = status == "ok"
+
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ERROR: kernel execution failed: {exc}", flush=True)
+        all_pass = False
+    finally:
+        try:
+            kc.stop_channels()
+            km.shutdown_kernel()
+        except Exception:  # noqa: BLE001
+            pass
+
+    overall = "PASS" if all_pass else "FAIL"
+    print(f"Environment check: {overall}", flush=True)
+    print(flush=True)
+    return all_pass
+
+
+def _env_check_output_hook(msg: dict) -> None:
+    """Print stream output from a kernel message during env check."""
+    msg_type = msg.get("msg_type", "")
+    content = msg.get("content", {})
+    if msg_type == "stream":
+        text = content.get("text", "")
+        if text:
+            print(text, end="", flush=True)
+    elif msg_type == "error":
+        # Print traceback lines but suppress the ENV_CHECK_FAILED noise
+        ename = content.get("ename", "")
+        evalue = content.get("evalue", "")
+        if not (ename == "RuntimeError" and evalue == "ENV_CHECK_FAILED"):
+            for line in content.get("traceback", []):
+                print(f"  {line}", flush=True)
+
+
 def print_port_status(port_status: dict[int, bool]) -> None:
     print("Scanning MLX servers...")
     labels = {8800: "8800", 8801: "8801", 8802: "8802"}
@@ -578,6 +689,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Check that every cell ID in NOTEBOOK_CONFIGS exists in the notebook. Exit 1 if stale IDs found.",
     )
+    parser.add_argument(
+        "--env-check",
+        action="store_true",
+        help="Validate kernel environment (PATH, tools, packages). Auto-runs at start of --smoke.",
+    )
     return parser.parse_args()
 
 
@@ -634,6 +750,21 @@ def main() -> None:
                         file=sys.stderr,
                     )
         if any_stale:
+            sys.exit(1)
+
+    # --env-check: run environment validation and exit
+    if args.env_check:
+        passed = run_env_check(args.kernel)
+        sys.exit(0 if passed else 1)
+
+    # --smoke: auto-run environment check before executing notebooks
+    if args.smoke:
+        passed = run_env_check(args.kernel)
+        if not passed:
+            print(
+                "Environment check failed. Fix kernel environment before running notebooks.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     # Pre-flight
