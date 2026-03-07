@@ -180,84 +180,44 @@ def detect_mlx():
     return info
 
 # ---------------------------------------------------------------------------
-# 5. Auto-Detect Running MLX Servers
+# 5. Auto-Detect Running MLX Servers (delegates to notebook_helpers)
 # ---------------------------------------------------------------------------
 
-# Port range to scan for mlx_lm.server instances
-SCAN_PORTS = range(8800, 8810)
-
-def _port_open(port):
-    """Check if a port is open on localhost."""
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1)
-        try:
-            s.connect(("localhost", port))
-            return True
-        except (ConnectionRefusedError, socket.timeout, OSError):
-            return False
-
-def _get_model_id_from_process(port):
-    """Get the --model argument from the mlx_lm process listening on a port."""
-    import os
-    env = os.environ.copy()
-    env["PATH"] = env.get("PATH", "") + ":/usr/sbin:/sbin"
-    try:
-        result = subprocess.run(
-            ["/usr/sbin/lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
-            capture_output=True, text=True, timeout=5, env=env,
-        )
-        if result.returncode != 0:
-            return None
-        pid = result.stdout.strip().split("\n")[0]
-        result = subprocess.run(
-            ["ps", "-p", pid, "-o", "args="],
-            capture_output=True, text=True, timeout=5, env=env,
-        )
-        args = result.stdout.strip()
-        parts = args.split()
-        for i, part in enumerate(parts):
-            if part == "--model" and i + 1 < len(parts):
-                return parts[i + 1]
-    except Exception:
-        pass
-    return None
-
-def _label_from_model_id(model_id):
-    """Derive a short label (e.g. '9B', '35B-A3B', '122B-A10B') from a model ID."""
-    import re
-    name = model_id.split("/")[-1].lower()
-    size_match = re.search(r'(?<![.\d])(122|35|27|9|8|4|2|1\.7|0\.8|0\.6|0\.5)b', name)
-    if not size_match:
-        return name[:12]
-    size = size_match.group(0).upper()
-    moe = re.search(r'a(\d+b)', name)
-    if moe:
-        return f"{size}-{moe.group(0).upper()}"
-    return size
-
-# Approximate memory footprints by label prefix (for display)
-_FOOTPRINTS = {
-    "122B": 65, "35B": 20, "27B": 15, "9B": 5, "8B": 4.5,
-    "4B": 2.5, "2B": 1.2, "1.7B": 1, "0.8B": 0.5, "0.6B": 0.4, "0.5B": 0.3,
-}
-
-def _estimate_size_gb(label):
-    """Estimate model size in GB from label."""
-    base = label.split("-")[0] if "-" in label else label
-    return _FOOTPRINTS.get(base, 0)
-
 def detect_mlx_servers():
-    """Scan ports for running mlx_lm.server instances. Returns list of dicts."""
+    """Scan ports for running mlx_lm.server instances. Returns list of dicts.
+
+    Uses notebook_helpers as the canonical detection logic (shared with notebooks).
+    """
+    try:
+        from notebook_helpers import (
+            PORTS, _port_open, _get_model_id_from_process,
+            _label_from_model_id, MODEL_FOOTPRINTS,
+        )
+    except ImportError:
+        # Fallback: add scripts/ to path (when run from repo root)
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+        from notebook_helpers import (
+            PORTS, _port_open, _get_model_id_from_process,
+            _label_from_model_id, MODEL_FOOTPRINTS,
+        )
+
+    # Parse "~65 GB" → 65.0
+    def _parse_footprint(s):
+        import re
+        m = re.search(r'[\d.]+', s)
+        return float(m.group()) if m else 0
+
     servers = []
-    for port in SCAN_PORTS:
+    for port in PORTS:
         if not _port_open(port):
             continue
         model_id = _get_model_id_from_process(port)
         if not model_id:
             continue
         label = _label_from_model_id(model_id)
-        size_gb = _estimate_size_gb(label)
+        base = label.split("-")[0] if "-" in label else label
+        size_gb = _parse_footprint(MODEL_FOOTPRINTS.get(base, "0"))
         servers.append({
             "port": port,
             "model_id": model_id,

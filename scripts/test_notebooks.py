@@ -144,7 +144,7 @@ NOTEBOOK_CONFIGS: dict[str, dict[str, dict]] = {
     },
 }
 
-MLX_PORTS = [8800, 8801, 8802]
+MLX_PORTS = list(range(8800, 8810))  # Scan all possible ports dynamically
 
 # ---------------------------------------------------------------------------
 # Pre-flight: port scanning
@@ -280,11 +280,14 @@ def _env_check_output_hook(msg: dict) -> None:
 
 def print_port_status(port_status: dict[int, bool]) -> None:
     print("Scanning MLX servers...")
-    labels = {8800: "8800", 8801: "8801", 8802: "8802"}
-    for port, up in port_status.items():
-        label = labels.get(port, "?")
-        status = f"UP ({label})" if up else "DOWN"
-        print(f"  Port {port}: {status}")
+    active = {port: up for port, up in port_status.items() if up}
+    inactive = {port: up for port, up in port_status.items() if not up}
+    for port in sorted(active):
+        print(f"  Port {port}: UP")
+    if not active:
+        print("  No active MLX servers found")
+    elif inactive:
+        print(f"  ({len(inactive)} other ports scanned, not active)")
     print()
 
 

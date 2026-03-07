@@ -32,7 +32,7 @@ def _port_open(port):
             return False
 
 
-PORTS = [8800, 8801, 8802, 8803]
+PORTS = range(8800, 8810)
 
 # Known sizes for sorting (largest first) — maps label prefix to sort weight
 _SIZE_ORDER = {
@@ -51,17 +51,11 @@ MODEL_FOOTPRINTS = {
 def _label_from_model_id(model_id):
     """Derive a short label (e.g. '9B-A3B', '122B-A10B') from a model ID string."""
     name = model_id.split("/")[-1].lower()
-    # Extract size — check longer patterns first to avoid "0.8b" matching "8b"
-    import re as _re2
-    size = None
-    size_match = _re2.search(r'(?<![.\d])(122|35|27|9|8|4|2|1\.7|0\.8|0\.6|0\.5)b', name)
-    if size_match:
-        size = size_match.group(0).upper()
-    if not size:
+    size_match = re.search(r'(?<![.\d])(122|35|27|9|8|4|2|1\.7|0\.8|0\.6|0\.5)b', name)
+    if not size_match:
         return name[:12]
-    # Extract MoE active param tag (e.g. A3B, A10B)
-    import re as _re
-    moe = _re.search(r'a(\d+b)', name)
+    size = size_match.group(0).upper()
+    moe = re.search(r'a(\d+b)', name)
     if moe:
         return f"{size}-{moe.group(0).upper()}"
     return size
