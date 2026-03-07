@@ -32,7 +32,7 @@ def _port_open(port):
             return False
 
 
-PORTS = [8800, 8801, 8802]
+PORTS = [8800, 8801, 8802, 8803]
 
 # Known sizes for sorting (largest first) — maps label prefix to sort weight
 _SIZE_ORDER = {

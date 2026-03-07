@@ -180,35 +180,93 @@ def detect_mlx():
     return info
 
 # ---------------------------------------------------------------------------
-# 5. Model Recommendations
+# 5. Auto-Detect Running MLX Servers
 # ---------------------------------------------------------------------------
 
-MODELS = [
-    {
-        "name":    "Qwen3.5-35B-A3B (MoE)",
-        "model_id": "RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4",
-        "size_gb": 20,
-        "min_ram": 24,
-        "note":    "~20 GB — excellent MoE, fast",
-        "port":    8800,
-    },
-    {
-        "name":    "Qwen3.5-9B",
-        "model_id": "RepublicOfKorokke/Qwen3.5-9B-mlx-lm-mxfp4",
-        "size_gb": 5,
-        "min_ram": 8,
-        "note":    "~5 GB — great mid-range sweet spot",
-        "port":    8801,
-    },
-    {
-        "name":    "Qwen3.5-2B",
-        "model_id": "RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4",
-        "size_gb": 1.2,
-        "min_ram": 4,
-        "note":    "~1.2 GB — tiny, runs anywhere",
-        "port":    8802,
-    },
-]
+# Port range to scan for mlx_lm.server instances
+SCAN_PORTS = range(8800, 8810)
+
+def _port_open(port):
+    """Check if a port is open on localhost."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        try:
+            s.connect(("localhost", port))
+            return True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            return False
+
+def _get_model_id_from_process(port):
+    """Get the --model argument from the mlx_lm process listening on a port."""
+    import os
+    env = os.environ.copy()
+    env["PATH"] = env.get("PATH", "") + ":/usr/sbin:/sbin"
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5, env=env,
+        )
+        if result.returncode != 0:
+            return None
+        pid = result.stdout.strip().split("\n")[0]
+        result = subprocess.run(
+            ["ps", "-p", pid, "-o", "args="],
+            capture_output=True, text=True, timeout=5, env=env,
+        )
+        args = result.stdout.strip()
+        parts = args.split()
+        for i, part in enumerate(parts):
+            if part == "--model" and i + 1 < len(parts):
+                return parts[i + 1]
+    except Exception:
+        pass
+    return None
+
+def _label_from_model_id(model_id):
+    """Derive a short label (e.g. '9B', '35B-A3B', '122B-A10B') from a model ID."""
+    import re
+    name = model_id.split("/")[-1].lower()
+    size_match = re.search(r'(?<![.\d])(122|35|27|9|8|4|2|1\.7|0\.8|0\.6|0\.5)b', name)
+    if not size_match:
+        return name[:12]
+    size = size_match.group(0).upper()
+    moe = re.search(r'a(\d+b)', name)
+    if moe:
+        return f"{size}-{moe.group(0).upper()}"
+    return size
+
+# Approximate memory footprints by label prefix (for display)
+_FOOTPRINTS = {
+    "122B": 65, "35B": 20, "27B": 15, "9B": 5, "8B": 4.5,
+    "4B": 2.5, "2B": 1.2, "1.7B": 1, "0.8B": 0.5, "0.6B": 0.4, "0.5B": 0.3,
+}
+
+def _estimate_size_gb(label):
+    """Estimate model size in GB from label."""
+    base = label.split("-")[0] if "-" in label else label
+    return _FOOTPRINTS.get(base, 0)
+
+def detect_mlx_servers():
+    """Scan ports for running mlx_lm.server instances. Returns list of dicts."""
+    servers = []
+    for port in SCAN_PORTS:
+        if not _port_open(port):
+            continue
+        model_id = _get_model_id_from_process(port)
+        if not model_id:
+            continue
+        label = _label_from_model_id(model_id)
+        size_gb = _estimate_size_gb(label)
+        servers.append({
+            "port": port,
+            "model_id": model_id,
+            "label": label,
+            "size_gb": size_gb,
+        })
+    # Sort by size descending
+    servers.sort(key=lambda s: s["size_gb"], reverse=True)
+    return servers
 
 def tier_label(total_gib):
     if total_gib >= 128:
@@ -220,12 +278,6 @@ def tier_label(total_gib):
     else:
         return "≤ 16 GB"
 
-def model_fits(model, total_gib):
-    """True if the model's minimum RAM requirement is met with a small headroom buffer."""
-    # Headroom: keep ~15 % free for OS / KV cache
-    usable = total_gib * 0.85
-    return usable >= model["size_gb"]
-
 # ---------------------------------------------------------------------------
 # 6. Quick-Start Commands
 # ---------------------------------------------------------------------------
@@ -234,16 +286,16 @@ QUICKSTART_MAC = """\
   # 1. Install dependencies
   pip install psutil mlx-lm openai
 
-  # 2. Launch MLX servers (one model per port for parallel inference)
-  mlx_lm.server --model RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4 --port 8800
-  mlx_lm.server --model RepublicOfKorokke/Qwen3.5-9B-mlx-lm-mxfp4 --port 8801
-  mlx_lm.server --model RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4 --port 8802
+  # 2. Launch MLX servers (one model per port)
+  #    Use any HuggingFace MLX model — the notebooks auto-detect what's running.
+  mlx_lm.server --model <org/model-name> --port 8800
+  mlx_lm.server --model <org/model-name> --port 8801
 
   # 3. Test with curl
   curl http://localhost:8800/v1/chat/completions \\
     -H "Content-Type: application/json" \\
     -d '{
-      "model": "RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4",
+      "model": "<org/model-name>",
       "messages": [{"role":"user","content":"Hello!"}]
     }'
 """
@@ -317,36 +369,34 @@ def main():
         check("mlx.core importable", False,
               "pip install mlx-lm  (Apple Silicon only)")
 
-    # ── Model Recommendations ────────────────────────────────────────────────
-    section("Model Recommendations")
+    # ── Running MLX Servers ─────────────────────────────────────────────────
+    section("Running MLX Servers")
 
-    if not ram["psutil_ok"]:
-        print(_c("    Cannot generate recommendations without RAM info.", RED))
-    else:
-        tier = tier_label(total_gib)
-        print(f"    Detected tier: {_c(tier, BOLD, GREEN)}")
-        print()
-
-        if os_info["is_mac"]:
-            print(f"    {'Model':<38} {'Fits?':<8} Note")
-            print("    " + "─" * 56)
-            for m in MODELS:
-                fits = model_fits(m, total_gib)
-                icon = _c("✓", GREEN) if fits else _c("✗", RED)
-                name_str = _c(m["name"], BOLD) if fits else _c(m["name"], DIM)
-                print(f"    {icon}  {name_str:<46} {_c(m['note'], DIM)}")
-        else:
-            # Non-Mac path: show NVIDIA VRAM-based guidance
-            vram_gib = nvidia_gpus[0]["vram_mib"] / 1024 if nvidia_gpus else 0
-            effective = max(vram_gib, total_gib)  # CPU offload possible
-            print(f"    {'Model':<38} {'Fits?':<8} Note")
-            print("    " + "─" * 56)
-            for m in MODELS:
-                fits = model_fits(m, effective)
-                icon = _c("✓", GREEN) if fits else _c("✗", RED)
-                name_str = _c(m["name"], BOLD) if fits else _c(m["name"], DIM)
-                print(f"    {icon}  {name_str:<46} {_c(m['note'], DIM)}")
+    if os_info["is_mac"]:
+        servers = detect_mlx_servers()
+        if servers:
+            total_model_gb = sum(s["size_gb"] for s in servers)
+            print(f"    Found {_c(str(len(servers)), BOLD, GREEN)} running mlx_lm.server instance(s):")
             print()
+            print(f"    {'Port':<8} {'Model':<50} {'Size':<10}")
+            print("    " + "─" * 66)
+            for s in servers:
+                size_str = f"~{s['size_gb']:.0f} GB" if s["size_gb"] >= 1 else f"~{s['size_gb']:.1f} GB"
+                print(f"    {s['port']:<8} {_c(s['label'], BOLD):<50} {_c(size_str, DIM)}")
+                print(f"    {'':8} {_c(s['model_id'], DIM)}")
+            print()
+            print(f"    Total model weight: ~{total_model_gb:.0f} GB")
+            if ram["psutil_ok"]:
+                headroom = total_gib - total_model_gb - 5  # ~5 GB OS
+                print(f"    KV cache headroom:  ~{headroom:.0f} GB")
+        else:
+            print(_c("    No running MLX servers detected on ports 8800-8809.", YELLOW))
+            print()
+            print("    Start a server with any HuggingFace MLX model:")
+            print(_c("    mlx_lm.server --model <org/model-name> --port 8800", DIM))
+    else:
+        print(_c("    MLX server detection is macOS only.", DIM))
+        if not nvidia_gpus:
             print(_c("    ⓘ  Non-Mac detected — recommend Ollama + GGUF models:", YELLOW))
             print(_c("       https://ollama.com  |  https://huggingface.co/bartowski", DIM))
 
@@ -354,12 +404,12 @@ def main():
     section("Quick Start")
     if os_info["is_mac"] and mlx["available"]:
         print(_c("    Apple Silicon + MLX detected 🎉", GREEN, BOLD))
+        if ram["psutil_ok"]:
+            tier = tier_label(total_gib)
+            print(f"    RAM tier: {_c(tier, BOLD, GREEN)}")
         print()
         print(QUICKSTART_MAC)
-        fitting = [m for m in MODELS if model_fits(m, total_gib)]
-        if fitting:
-            total_gb = sum(m["size_gb"] for m in fitting)
-            print(f"    Your {total_gib:.0f} GiB system can run {len(fitting)} model(s) simultaneously (~{total_gb:.0f} GB total)")
+        print("    Notebooks auto-detect all running servers — no config needed.")
     elif os_info["is_mac"] and not mlx["available"]:
         print(_c("    Apple Silicon detected but MLX not installed:", YELLOW))
         print()
