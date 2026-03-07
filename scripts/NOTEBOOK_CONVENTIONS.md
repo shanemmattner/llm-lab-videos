@@ -101,7 +101,7 @@ Validate cell output after execution:
 **Why:** `/v1/models` lists every model in the HuggingFace cache — not just the one currently loaded. Passing the wrong model ID to the OpenAI client causes the server to silently swap models mid-session.
 
 **What it does instead:**
-1. Checks each port (8800–8802) with a TCP connect.
+1. Checks each port (8800–8809) with a TCP connect.
 2. For live ports, runs `lsof` to get the PID, then `ps` to read the process command line.
 3. Parses the `--model <id>` argument directly from the command line.
 
