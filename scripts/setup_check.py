@@ -102,9 +102,16 @@ def detect_apple_silicon(os_info):
     out, rc = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
     if rc == 0 and out:
         return out
-    # Fallback: sysctl hw.model gives the Mac model
-    out2, rc2 = _run(["sysctl", "-n", "hw.model"])
-    return out2 if rc2 == 0 else "Apple Silicon (unknown variant)"
+    # macOS 26+ removed machdep.cpu.brand_string — use system_profiler
+    out2, rc2 = _run(["/usr/sbin/system_profiler", "SPHardwareDataType"], timeout=10)
+    if rc2 == 0 and out2:
+        for line in out2.splitlines():
+            line = line.strip()
+            if "Chip" in line and ":" in line:
+                return line.split(":", 1)[1].strip()
+    # Final fallback
+    out3, rc3 = _run(["sysctl", "-n", "hw.model"])
+    return out3 if rc3 == 0 else "Apple Silicon (unknown variant)"
 
 def detect_nvidia_gpu():
     """
@@ -173,32 +180,53 @@ def detect_mlx():
     return info
 
 # ---------------------------------------------------------------------------
-# 5. Model Recommendations
+# 5. Auto-Detect Running MLX Servers (delegates to notebook_helpers)
 # ---------------------------------------------------------------------------
 
-MODELS = [
-    {
-        "name":    "Qwen3.5-122B-A10B-nvfp4",
-        "size_gb": 65,
-        "min_ram": 128,
-        "note":    "~65 GB — massive MoE, best quality",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-122B-A10B-nvfp4",
-    },
-    {
-        "name":    "Qwen3.5-35B-A3B-4bit",
-        "size_gb": 20,
-        "min_ram": 24,
-        "note":    "~20 GB — excellent MoE, fast",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-35B-A3B-4bit",
-    },
-    {
-        "name":    "Qwen3.5-2B-4bit",
-        "size_gb": 1.2,
-        "min_ram": 4,
-        "note":    "~1.2 GB — tiny, runs anywhere",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-2B-4bit",
-    },
-]
+def detect_mlx_servers():
+    """Scan ports for running mlx_lm.server instances. Returns list of dicts.
+
+    Uses notebook_helpers as the canonical detection logic (shared with notebooks).
+    """
+    try:
+        from notebook_helpers import (
+            PORTS, _port_open, _get_model_id_from_process,
+            _label_from_model_id, MODEL_FOOTPRINTS,
+        )
+    except ImportError:
+        # Fallback: add scripts/ to path (when run from repo root)
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+        from notebook_helpers import (
+            PORTS, _port_open, _get_model_id_from_process,
+            _label_from_model_id, MODEL_FOOTPRINTS,
+        )
+
+    # Parse "~65 GB" → 65.0
+    def _parse_footprint(s):
+        import re
+        m = re.search(r'[\d.]+', s)
+        return float(m.group()) if m else 0
+
+    servers = []
+    for port in PORTS:
+        if not _port_open(port):
+            continue
+        model_id = _get_model_id_from_process(port)
+        if not model_id:
+            continue
+        label = _label_from_model_id(model_id)
+        base = label.split("-")[0] if "-" in label else label
+        size_gb = _parse_footprint(MODEL_FOOTPRINTS.get(base, "0"))
+        servers.append({
+            "port": port,
+            "model_id": model_id,
+            "label": label,
+            "size_gb": size_gb,
+        })
+    # Sort by size descending
+    servers.sort(key=lambda s: s["size_gb"], reverse=True)
+    return servers
 
 def tier_label(total_gib):
     if total_gib >= 128:
@@ -210,12 +238,6 @@ def tier_label(total_gib):
     else:
         return "≤ 16 GB"
 
-def model_fits(model, total_gib):
-    """True if the model's minimum RAM requirement is met with a small headroom buffer."""
-    # Headroom: keep ~15 % free for OS / KV cache
-    usable = total_gib * 0.85
-    return usable >= model["size_gb"]
-
 # ---------------------------------------------------------------------------
 # 6. Quick-Start Commands
 # ---------------------------------------------------------------------------
@@ -224,14 +246,16 @@ QUICKSTART_MAC = """\
   # 1. Install dependencies
   pip install psutil mlx-lm openai
 
-  # 2. Launch the MLX server (replace MODEL_ID with your choice below)
-  mlx_lm.server --model mlx-community/MODEL_ID
+  # 2. Launch MLX servers (one model per port)
+  #    Use any HuggingFace MLX model — the notebooks auto-detect what's running.
+  mlx_lm.server --model <org/model-name> --port 8800
+  mlx_lm.server --model <org/model-name> --port 8801
 
-  # 3. In another terminal — test with curl
-  curl http://localhost:8080/v1/chat/completions \\
+  # 3. Test with curl
+  curl http://localhost:8800/v1/chat/completions \\
     -H "Content-Type: application/json" \\
     -d '{
-      "model": "mlx-community/MODEL_ID",
+      "model": "<org/model-name>",
       "messages": [{"role":"user","content":"Hello!"}]
     }'
 """
@@ -305,49 +329,47 @@ def main():
         check("mlx.core importable", False,
               "pip install mlx-lm  (Apple Silicon only)")
 
-    # ── Model Recommendations ────────────────────────────────────────────────
-    section("Model Recommendations")
+    # ── Running MLX Servers ─────────────────────────────────────────────────
+    section("Running MLX Servers")
 
-    if not ram["psutil_ok"]:
-        print(_c("    Cannot generate recommendations without RAM info.", RED))
-    else:
-        tier = tier_label(total_gib)
-        print(f"    Detected tier: {_c(tier, BOLD, GREEN)}")
-        print()
-
-        if os_info["is_mac"]:
-            print(f"    {'Model':<38} {'Fits?':<8} Note")
-            print("    " + "─" * 56)
-            for m in MODELS:
-                fits = model_fits(m, total_gib)
-                icon = _c("✓", GREEN) if fits else _c("✗", RED)
-                name_str = _c(m["name"], BOLD) if fits else _c(m["name"], DIM)
-                print(f"    {icon}  {name_str:<46} {_c(m['note'], DIM)}")
-        else:
-            # Non-Mac path: show NVIDIA VRAM-based guidance
-            vram_gib = nvidia_gpus[0]["vram_mib"] / 1024 if nvidia_gpus else 0
-            effective = max(vram_gib, total_gib)  # CPU offload possible
-            print(f"    {'Model':<38} {'Fits?':<8} Note")
-            print("    " + "─" * 56)
-            for m in MODELS:
-                fits = model_fits(m, effective)
-                icon = _c("✓", GREEN) if fits else _c("✗", RED)
-                name_str = _c(m["name"], BOLD) if fits else _c(m["name"], DIM)
-                print(f"    {icon}  {name_str:<46} {_c(m['note'], DIM)}")
+    if os_info["is_mac"]:
+        servers = detect_mlx_servers()
+        if servers:
+            total_model_gb = sum(s["size_gb"] for s in servers)
+            print(f"    Found {_c(str(len(servers)), BOLD, GREEN)} running mlx_lm.server instance(s):")
             print()
+            print(f"    {'Port':<8} {'Model':<50} {'Size':<10}")
+            print("    " + "─" * 66)
+            for s in servers:
+                size_str = f"~{s['size_gb']:.0f} GB" if s["size_gb"] >= 1 else f"~{s['size_gb']:.1f} GB"
+                print(f"    {s['port']:<8} {_c(s['label'], BOLD):<50} {_c(size_str, DIM)}")
+                print(f"    {'':8} {_c(s['model_id'], DIM)}")
+            print()
+            print(f"    Total model weight: ~{total_model_gb:.0f} GB")
+            if ram["psutil_ok"]:
+                headroom = total_gib - total_model_gb - 5  # ~5 GB OS
+                print(f"    KV cache headroom:  ~{headroom:.0f} GB")
+        else:
+            print(_c("    No running MLX servers detected on ports 8800-8809.", YELLOW))
+            print()
+            print("    Start a server with any HuggingFace MLX model:")
+            print(_c("    mlx_lm.server --model <org/model-name> --port 8800", DIM))
+    else:
+        print(_c("    MLX server detection is macOS only.", DIM))
+        if not nvidia_gpus:
             print(_c("    ⓘ  Non-Mac detected — recommend Ollama + GGUF models:", YELLOW))
             print(_c("       https://ollama.com  |  https://huggingface.co/bartowski", DIM))
 
     # ── Quick Start ──────────────────────────────────────────────────────────
     section("Quick Start")
     if os_info["is_mac"] and mlx["available"]:
-        # Show the best fitting model command
-        best = next((m for m in MODELS if model_fits(m, total_gib)), MODELS[-1])
         print(_c("    Apple Silicon + MLX detected 🎉", GREEN, BOLD))
+        if ram["psutil_ok"]:
+            tier = tier_label(total_gib)
+            print(f"    RAM tier: {_c(tier, BOLD, GREEN)}")
         print()
-        print(QUICKSTART_MAC.replace("MODEL_ID", best["name"].replace("Qwen", "Qwen")))
-        print(f"    Recommended model for your {total_gib:.0f} GiB system:")
-        print(f"    {_c(best['mac_cmd'], CYAN)}")
+        print(QUICKSTART_MAC)
+        print("    Notebooks auto-detect all running servers — no config needed.")
     elif os_info["is_mac"] and not mlx["available"]:
         print(_c("    Apple Silicon detected but MLX not installed:", YELLOW))
         print()

@@ -1,0 +1,14 @@
+{
+ "argv": [
+  "/opt/homebrew/opt/python@3.14/bin/python3.14",
+  "-m",
+  "ipykernel_launcher",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "Python 3 (Homebrew)",
+ "language": "python",
+ "env": {
+  "PATH": "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ }
+}

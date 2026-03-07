@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# start_servers.sh — Launch 3 MLX servers for the 3-model arena comparison
+# start_servers.sh — Launch MLX servers for arena comparison
+# Edit MODELS below to run whatever models you want on any ports (8800-8809).
+# Notebooks auto-detect all running servers — no config changes needed.
 # Requires: ~/.local/share/mlx-server/venv/ with mlx-lm installed
-# RAM needed: ~85GB (122B ~65GB + 35B ~20GB + 0.8B ~0.5GB)
 
 GREEN='\033[92m'
 RED='\033[91m'
