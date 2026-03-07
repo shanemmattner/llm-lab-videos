@@ -102,9 +102,16 @@ def detect_apple_silicon(os_info):
     out, rc = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
     if rc == 0 and out:
         return out
-    # Fallback: sysctl hw.model gives the Mac model
-    out2, rc2 = _run(["sysctl", "-n", "hw.model"])
-    return out2 if rc2 == 0 else "Apple Silicon (unknown variant)"
+    # macOS 26+ removed machdep.cpu.brand_string — use system_profiler
+    out2, rc2 = _run(["/usr/sbin/system_profiler", "SPHardwareDataType"], timeout=10)
+    if rc2 == 0 and out2:
+        for line in out2.splitlines():
+            line = line.strip()
+            if "Chip" in line and ":" in line:
+                return line.split(":", 1)[1].strip()
+    # Final fallback
+    out3, rc3 = _run(["sysctl", "-n", "hw.model"])
+    return out3 if rc3 == 0 else "Apple Silicon (unknown variant)"
 
 def detect_nvidia_gpu():
     """
@@ -178,25 +185,28 @@ def detect_mlx():
 
 MODELS = [
     {
-        "name":    "Qwen3.5-122B-A10B-nvfp4",
-        "size_gb": 65,
-        "min_ram": 128,
-        "note":    "~65 GB — massive MoE, best quality",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-122B-A10B-nvfp4",
-    },
-    {
-        "name":    "Qwen3.5-35B-A3B-4bit",
+        "name":    "Qwen3.5-35B-A3B (MoE)",
+        "model_id": "RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4",
         "size_gb": 20,
         "min_ram": 24,
         "note":    "~20 GB — excellent MoE, fast",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-35B-A3B-4bit",
+        "port":    8800,
     },
     {
-        "name":    "Qwen3.5-2B-4bit",
+        "name":    "Qwen3.5-9B",
+        "model_id": "RepublicOfKorokke/Qwen3.5-9B-mlx-lm-mxfp4",
+        "size_gb": 5,
+        "min_ram": 8,
+        "note":    "~5 GB — great mid-range sweet spot",
+        "port":    8801,
+    },
+    {
+        "name":    "Qwen3.5-2B",
+        "model_id": "RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4",
         "size_gb": 1.2,
         "min_ram": 4,
         "note":    "~1.2 GB — tiny, runs anywhere",
-        "mac_cmd": "mlx_lm.server --model mlx-community/Qwen3.5-2B-4bit",
+        "port":    8802,
     },
 ]
 
@@ -224,14 +234,16 @@ QUICKSTART_MAC = """\
   # 1. Install dependencies
   pip install psutil mlx-lm openai
 
-  # 2. Launch the MLX server (replace MODEL_ID with your choice below)
-  mlx_lm.server --model mlx-community/MODEL_ID
+  # 2. Launch MLX servers (one model per port for parallel inference)
+  mlx_lm.server --model RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4 --port 8800
+  mlx_lm.server --model RepublicOfKorokke/Qwen3.5-9B-mlx-lm-mxfp4 --port 8801
+  mlx_lm.server --model RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4 --port 8802
 
-  # 3. In another terminal — test with curl
-  curl http://localhost:8080/v1/chat/completions \\
+  # 3. Test with curl
+  curl http://localhost:8800/v1/chat/completions \\
     -H "Content-Type: application/json" \\
     -d '{
-      "model": "mlx-community/MODEL_ID",
+      "model": "RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4",
       "messages": [{"role":"user","content":"Hello!"}]
     }'
 """
@@ -341,13 +353,13 @@ def main():
     # ── Quick Start ──────────────────────────────────────────────────────────
     section("Quick Start")
     if os_info["is_mac"] and mlx["available"]:
-        # Show the best fitting model command
-        best = next((m for m in MODELS if model_fits(m, total_gib)), MODELS[-1])
         print(_c("    Apple Silicon + MLX detected 🎉", GREEN, BOLD))
         print()
-        print(QUICKSTART_MAC.replace("MODEL_ID", best["name"].replace("Qwen", "Qwen")))
-        print(f"    Recommended model for your {total_gib:.0f} GiB system:")
-        print(f"    {_c(best['mac_cmd'], CYAN)}")
+        print(QUICKSTART_MAC)
+        fitting = [m for m in MODELS if model_fits(m, total_gib)]
+        if fitting:
+            total_gb = sum(m["size_gb"] for m in fitting)
+            print(f"    Your {total_gib:.0f} GiB system can run {len(fitting)} model(s) simultaneously (~{total_gb:.0f} GB total)")
     elif os_info["is_mac"] and not mlx["available"]:
         print(_c("    Apple Silicon detected but MLX not installed:", YELLOW))
         print()

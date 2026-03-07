@@ -6,12 +6,8 @@ import threading
 import socket
 from IPython.display import HTML, display
 
-# Registry of all known models
-ALL_MODELS = [
-    {"label": "122B", "model": "arthurcollet/Qwen3.5-122B-A10B-mlx-nvfp4",          "port": 8800, "color": "#2563eb"},
-    {"label": "35B",  "model": "RepublicOfKorokke/Qwen3.5-35B-A3B-mlx-lm-nvfp4",   "port": 8801, "color": "#16a34a"},
-    {"label": "2B",   "model": "RepublicOfKorokke/Qwen3.5-2B-mlx-lm-nvfp4",        "port": 8802, "color": "#f59e0b"},
-]
+# Color palette for N models (cycles if more than 8)
+COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"]
 
 # Module-level state (set by init())
 MODELS = []
@@ -36,18 +32,39 @@ def _port_open(port):
             return False
 
 
-# Port → display color
-PORT_COLORS = {8800: "#2563eb", 8801: "#16a34a", 8802: "#f59e0b"}
 PORTS = [8800, 8801, 8802]
+
+# Known sizes for sorting (largest first) — maps label prefix to sort weight
+_SIZE_ORDER = {
+    "122B": 0, "35B": 1, "27B": 2, "9B": 3, "8B": 4,
+    "4B": 5, "2B": 6, "1.7B": 7, "0.8B": 8, "0.6B": 9, "0.5B": 10,
+}
+
+# Approximate memory footprints by label
+MODEL_FOOTPRINTS = {
+    "122B": "~65 GB", "35B": "~20 GB", "27B": "~15 GB", "9B": "~5 GB",
+    "8B": "~4.5 GB", "4B": "~2.5 GB", "2B": "~1.2 GB", "1.7B": "~1 GB",
+    "0.8B": "~0.5 GB", "0.6B": "~0.4 GB", "0.5B": "~0.3 GB",
+}
 
 
 def _label_from_model_id(model_id):
-    """Derive a short label (e.g. '9B', '122B') from a model ID string."""
+    """Derive a short label (e.g. '9B-A3B', '122B-A10B') from a model ID string."""
     name = model_id.split("/")[-1].lower()
-    for tag in ["122b", "35b", "9b", "8b", "2b", "0.6b", "0.5b"]:
-        if tag in name:
-            return tag.upper()
-    return name[:12]
+    # Extract size — check longer patterns first to avoid "0.8b" matching "8b"
+    import re as _re2
+    size = None
+    size_match = _re2.search(r'(?<![.\d])(122|35|27|9|8|4|2|1\.7|0\.8|0\.6|0\.5)b', name)
+    if size_match:
+        size = size_match.group(0).upper()
+    if not size:
+        return name[:12]
+    # Extract MoE active param tag (e.g. A3B, A10B)
+    import re as _re
+    moe = _re.search(r'a(\d+b)', name)
+    if moe:
+        return f"{size}-{moe.group(0).upper()}"
+    return size
 
 
 def _get_model_id_from_process(port):
@@ -78,6 +95,58 @@ def _get_model_id_from_process(port):
     return None
 
 
+def _sort_key(label):
+    """Sort key for model labels — largest first, unknown at end."""
+    # Strip MoE suffix for lookup (e.g. "35B-A3B" → "35B")
+    base = label.split("-")[0] if "-" in label else label
+    return _SIZE_ORDER.get(base, 99)
+
+
+def list_available_models(port=8800):
+    """Query an MLX server's /v1/models endpoint to list all cached models.
+
+    Returns list of dicts sorted by size (largest first):
+        [{"model": "full/model-id", "label": "35B-A3B"}, ...]
+    """
+    import urllib.request, json
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=5) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        raise RuntimeError(f"Cannot reach MLX server on port {port}: {e}") from e
+    models = []
+    for m in data.get("data", []):
+        model_id = m["id"]
+        label = _label_from_model_id(model_id)
+        models.append({"model": model_id, "label": label})
+    models.sort(key=lambda m: _sort_key(m["label"]))
+    return models
+
+
+def discover_models(port=8800, model_ids=None):
+    """Set up N models on a single MLX server port.
+
+    If model_ids is None, discovers all available models via /v1/models.
+    Returns (models_list, clients_dict) ready to pass to init().
+    """
+    from openai import OpenAI
+
+    if model_ids is None:
+        available = list_available_models(port)
+        model_ids = [m["model"] for m in available]
+
+    models = []
+    _clients = {}
+    client = OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="unused")
+    for i, model_id in enumerate(model_ids):
+        label = _label_from_model_id(model_id)
+        color = COLORS[i % len(COLORS)]
+        m = {"label": label, "model": model_id, "port": port, "color": color}
+        models.append(m)
+        _clients[label] = client  # All share same client (same port)
+    return models, _clients
+
+
 def discover_servers(ports=None):
     """Discover running MLX servers by checking each port.
 
@@ -98,10 +167,13 @@ def discover_servers(ports=None):
         if not model_id:
             continue
         label = _label_from_model_id(model_id)
-        color = PORT_COLORS.get(port, "#6b7280")
-        m = {"label": label, "model": model_id, "port": port, "color": color}
+        m = {"label": label, "model": model_id, "port": port}
         models.append(m)
         _clients[label] = OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="unused")
+    # Sort by size (largest first) and assign colors
+    models.sort(key=lambda m: _sort_key(m["label"]))
+    for i, m in enumerate(models):
+        m["color"] = COLORS[i % len(COLORS)]
     return models, _clients
 
 
@@ -132,7 +204,8 @@ def _md(text):
 
 
 def _render_cards(state, models_order):
-    """Render 3-column HTML cards from current state."""
+    """Render N-column HTML cards from current state."""
+    min_w = "200px" if len(models_order) > 4 else "250px"
     cards = ""
     for m in models_order:
         s = state[m["label"]]
@@ -161,7 +234,7 @@ def _render_cards(state, models_order):
             else:
                 status = f"streaming... {s['tokens']} tok {elapsed_str}"
         cards += f"""
-        <div style="flex:1; min-width:250px; background:#f9fafb; border:1px solid #d1d5db;
+        <div style="flex:1; min-width:{min_w}; background:#f9fafb; border:1px solid #d1d5db;
                     border-left:4px solid {s['color']}; border-radius:0 8px 8px 0; padding:12px 18px;">
           <div style="color:{s['color']}; font-weight:bold; font-size:0.85em; margin-bottom:6px;">
             {m['label']} · {status}
@@ -177,12 +250,12 @@ def _render_cards(state, models_order):
 
 
 def compare_models(prompt, system_prompt=None, **kwargs):
-    """Fire the same prompt at all 3 models in parallel with streaming, display side-by-side cards."""
+    """Fire the same prompt at all N models in parallel with streaming, display side-by-side cards."""
     kwargs.setdefault("max_tokens", 1024)
     kwargs.setdefault("extra_body", {"chat_template_kwargs": {"enable_thinking": False}})
 
-    order = {"2B": 0, "35B": 1, "122B": 2}
-    models_order = sorted(MODELS, key=lambda m: order.get(m["label"], 99))
+    # Use MODELS order as-is (already sorted by discover_models or user selection)
+    models_order = list(MODELS)
 
     # Shared state for each model
     state = {}
@@ -231,7 +304,7 @@ def compare_models(prompt, system_prompt=None, **kwargs):
                 state[label]["tps"] = state[label]["tokens"] / elapsed
             state[label]["done"] = True
 
-    # Launch all 3 streaming threads
+    # Launch all streaming threads
     threads = []
     for m in MODELS:
         t = threading.Thread(target=stream_model, args=(m,))
